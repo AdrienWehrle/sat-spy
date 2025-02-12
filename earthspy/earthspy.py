@@ -48,9 +48,9 @@ class EarthSpy:
         self.CLIENT_SECRET = credentials[1]
 
         # setup connection
-        self.configure_connection()
+        self.configure_sentinelhub_connection()
 
-    def configure_connection(self) -> shb.SHConfig:
+    def configure_sentinelhub_connection(self) -> shb.SHConfig:
         """Build a shb configuration class for the connection to Sentinel Hub services.
 
         :return: sentinelhub-py package configuration class.
@@ -68,6 +68,36 @@ class EarthSpy:
         self.config.sh_client_id = self.CLIENT_ID
         self.config.sh_client_secret = self.CLIENT_SECRET
 
+        return self.config
+
+    def configure_dataspace_connection(self, CLIENT_dataspace_file) -> shb.SHConfig:
+        """Build a shb configuration class for the connection to Sentinel Hub services.
+
+        :return: sentinelhub-py package configuration class.
+        :rtype: shb.SHConfig
+        """
+
+        # setup Sentinel Hub connection
+        self.config = shb.SHConfig()
+
+        # read credentials stored in text file
+        with open(CLIENT_dataspace_file) as file:
+            credentials = file.read().splitlines()
+
+        # extract credentials from lines
+        self.CLIENT_ID = credentials[0]
+        self.CLIENT_SECRET = credentials[1]
+
+        # modify default download parameters for batch downloads
+        self.config.download_timeout_seconds = 300
+        self.config.download_sleep_time = 20
+
+        # set credentials
+        self.config.sh_client_id = self.CLIENT_ID
+        self.config.sh_client_secret = self.CLIENT_SECRET
+
+        self.config.sh_base_url = "https://sh.dataspace.copernicus.eu"
+        self.config.sh_token_url = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
         return self.config
 
     def set_query_parameters(
@@ -267,9 +297,10 @@ class EarthSpy:
 
         except shb.exceptions.DownloadFailedException:
             # set specific base URL of deployment
-            self.catalog_config.sh_base_url = shb.DataCollection[
-                self.data_collection_str
-            ].service_url
+            if shb.DataCollection[self.data_collection_str] != "SENTINEL3_OLCI":
+                self.catalog_config.sh_base_url = shb.DataCollection[
+                    self.data_collection_str
+                ].service_url
 
             # setup Sentinel Hub Catalog API (with STAC Specification)
             self.catalog = shb.SentinelHubCatalog(config=self.catalog_config)
@@ -828,6 +859,31 @@ class EarthSpy:
             config=self.config,
         )
 
+        if self.algorithm == "S3_temp":
+            # build Sentinel Hub request
+            shb_request = shb.SentinelHubRequest(
+                data_folder=self.store_folder,
+                evalscript=self.evaluation_script,
+                input_data=[
+                    shb.SentinelHubRequest.input_data(
+                        data_collection=self.data_collection.define_from(
+                            "s3olci", service_url=self.config.sh_base_url
+                        ),
+                        mosaicking_order=shb.MosaickingOrder.LEAST_RECENT,
+                        time_interval=(date_string, date_string),
+                        other_args={"processing": {"orthorectify": True}},
+                    )
+                ],
+                responses=[
+                    shb.SentinelHubRequest.output_response(
+                        "default", shb.MimeType.TIFF
+                    ),
+                ],
+                bbox=loc_bbox,
+                size=loc_size,
+                config=self.config,
+            )
+
         if self.algorithm == "SICE":
             self.response_files = [
                 "r_TOA_01",
@@ -877,6 +933,8 @@ class EarthSpy:
 
         # list SentinelHub requests to send over
         self.list_requests()
+
+        print(self.list_requests())
 
         # store time and start time
         if self.verbose:
